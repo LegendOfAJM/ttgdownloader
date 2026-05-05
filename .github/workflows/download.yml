@@ -1,0 +1,67 @@
+name: Download Split Push
+
+on:
+  workflow_dispatch:
+    inputs:
+      download_url:
+        description: 'Download URL'
+        required: true
+        default: 'https://cf.linkulu.com/dl/69f893b7d87da2dd04aa992f'
+
+jobs:
+  download-split-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Extract ID from URL
+        id: extract
+        run: |
+          URL="${{ github.event.inputs.download_url }}"
+          ID=$(echo "$URL" | grep -oE '[a-f0-9]{32}' | head -1)
+          if [ -z "$ID" ]; then
+            ID=$(date +%s)
+          fi
+          echo "ID=$ID" >> $GITHUB_OUTPUT
+          echo "Folder name: $ID"
+          
+      - name: Download file
+        run: |
+          URL="${{ github.event.inputs.download_url }}"
+          echo "Downloading from: $URL"
+          
+          curl -L --progress-bar --retry 10 --retry-delay 5 \
+               --connect-timeout 30 --max-time 7200 \
+               --output myfile "$URL"
+          
+          SIZE=$(stat -c%s "myfile")
+          SIZE_MB=$((SIZE/1024/1024))
+          echo "Downloaded: ${SIZE_MB} MB"
+          
+      - name: Split into 95MB chunks
+        run: |
+          ID="${{ steps.extract.outputs.ID }}"
+          mkdir -p download/$ID
+          split -b 95m myfile "download/$ID/part_"
+          PART_COUNT=$(ls -1 "download/$ID"/part_* 2>/dev/null | wc -l)
+          echo "Split into $PART_COUNT parts (95MB each)"
+          ls -lh "download/$ID/"
+          
+      - name: Push to repository
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "actions@github.com"
+          git add download/
+          git commit -m "Add downloaded files to download folder" || echo "No changes"
+          git push origin main
+          echo "Files saved in: download/${{ steps.extract.outputs.ID }}/"
+          
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ steps.extract.outputs.ID }}-parts"
+          path: "download/${{ steps.extract.outputs.ID }}/"
+          retention-days: 7
